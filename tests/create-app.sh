@@ -22,7 +22,7 @@ if [ -n "${SWERVE_PATH:-}" ]; then
 fi
 composer require --no-interaction --no-progress --no-scripts \
     "symfony/twig-bundle:$version.*" "symfony/security-bundle:$version.*" \
-    "symfony/security-csrf:$version.*" "symfony/mime:$version.*" "phasync/swerve:^0.1.0-alpha12"
+    "symfony/security-csrf:$version.*" "symfony/mime:$version.*" "phasync/swerve:^0.1.0-alpha15"
 cp -r ../routes/. .
 printf 'APP_ENV=prod\nAPP_DEBUG=0\nAPP_SECRET=swerve-symfony-tests\n' > .env.local
 rm -rf var

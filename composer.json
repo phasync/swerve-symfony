@@ -12,7 +12,7 @@
     ],
     "require": {
         "php": "^8.2",
-        "phasync/swerve": "^0.1.0-alpha12",
+        "phasync/swerve": "^0.1.0-alpha15",
         "psr/http-server-handler": "^1.0",
         "symfony/http-foundation": "^6.4 || ^7.0",
         "symfony/http-kernel": "^6.4 || ^7.0",
