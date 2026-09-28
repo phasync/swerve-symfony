@@ -11,6 +11,8 @@ request and response bodies, and hold WebSockets and Server-Sent Events. This pa
 run a Symfony application unchanged, and lets its controllers hold [WebSockets](#websockets).
 
 ```bash
+composer config minimum-stability alpha   # while swerve is in alpha
+composer config prefer-stable true         # everything else stays stable
 composer require phasync/swerve-symfony
 ```
 
