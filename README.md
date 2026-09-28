@@ -8,7 +8,7 @@
 **Your Symfony application, booted once and kept warm.** [swerve](https://github.com/phasync/swerve)
 is a PHP application server: long-running workers that serve HTTP/1.1 themselves, stream
 request and response bodies, and hold WebSockets and Server-Sent Events. This package lets it
-run a Symfony application unchanged.
+run a Symfony application unchanged, and lets its controllers hold [WebSockets](#websockets).
 
 ```bash
 composer require phasync/swerve-symfony
@@ -31,6 +31,80 @@ the same application still runs under PHP-FPM.
 
 Named options: `kernels: 16`, the most kernels per worker, so the most requests a worker serves
 at once (see [Concurrency](#how-it-runs)); `frontController: 'public/index.php'`.
+
+## WebSockets
+
+A controller returns `Swerve\Http\WebSocket::from()`, a PSR-7 response, with the callback that
+runs on the connection. The PSR-7 request it needs is the request attribute
+`Psr\Http\Message\ServerRequestInterface`:
+
+```php
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Swerve\Http\WebSocket;
+
+#[Route('/chat')]
+public function chat(Request $request): ResponseInterface
+{
+    return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) {
+        foreach ($ws as $message) {                     // text or binary, until the client leaves
+            $ws->isBinary() ? $ws->sendBinary($message) : $ws->send("echo: $message");
+        }
+    });
+}
+```
+
+An ordinary `GET` to the route is answered `426 Upgrade Required`. A connection holds no kernel:
+the kernel goes back to the pool with the `101`, so a worker holds hundreds of sockets and
+serves requests beside them with as few kernels as those requests need.
+
+**Server push.** A callback that only forwards a topic ends when its client leaves, and any
+route, in any worker, publishes to it:
+
+```php
+#[Route('/news', methods: ['GET'])]
+public function news(Request $request): ResponseInterface
+{
+    return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) {
+        foreach (Swerve::subscribe('news') as $message) {
+            $ws->send($message);
+        }
+    });
+}
+
+#[Route('/news', methods: ['POST'])]
+public function publish(Request $request): Response
+{
+    Swerve::publish('news', $request->getContent());
+
+    return new Response('published');
+}
+```
+
+**The user and the session: take them first.** The callback runs after the kernel went back to
+the pool, when its services (the security token storage, the `RequestStack`, the session, your
+own) serve whichever request comes next: read inside the callback, `$this->getUser()` may give
+another user. Take what the callback needs before `WebSocket::from()`, and pass it in:
+
+```php
+#[Route('/me')]
+public function me(Request $request): ResponseInterface
+{
+    $user = $this->getUser()?->getUserIdentifier();
+    $cart = $request->getSession()->get('cart', []);
+
+    return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) use ($user, $cart) {
+        foreach ($ws as $message) {
+            $ws->send("$user: $message");
+        }
+    });
+}
+```
+
+A `static` closure keeps `$this` (the controller and its container) out of it. On a shutdown or
+reload, open sockets are closed with `1001`, and the worker exits once their callbacks end.
+Take the PSR-7 request from the attribute, not from a resolver of symfony/psr-http-message-bridge:
+that one is made from the `Request`, with no connection behind its body.
 
 ## What changes
 
@@ -68,19 +142,8 @@ The Symfony 7.4 skeleton, 4 workers each, requests per second:
   the client reads it, with `Range` support. Both hold their kernel until they end. When the
   client leaves, the callback's next `echo` throws, ending it as PHP-FPM ends a script.
 - **PSR-7 from controllers:** a controller may return a PSR-7 response, which swerve gets as it
-  is. The PSR-7 request is the `Psr\Http\Message\ServerRequestInterface` request attribute:
-
-  ```php
-  #[Route('/chat')]
-  public function chat(Request $request): ResponseInterface
-  {
-      return WebSocket::from($request->attributes->get(ServerRequestInterface::class), function (WebSocket $ws) {
-          foreach ($ws as $message) {
-              $ws->send("echo: $message");
-          }
-      });
-  }
-  ```
+  is, such as a [WebSocket](#websockets). The PSR-7 request is the
+  `Psr\Http\Message\ServerRequestInterface` request attribute.
 
 ### Sessions
 
@@ -128,7 +191,11 @@ saves, as in PHP.
   takes one: set `kernels:` above the streams a worker holds at once, or return a PSR-7
   response with a `phasync\Psr\UnbufferedStream` body fed by a coroutine, which holds none.
   Code that runs after the controller returned (such a coroutine, a WebSocket callback) must not
-  use the kernel's services, which serve the next request by then.
+  use the kernel's services, which serve the next request by then: take the user and session
+  data first, as in [WebSockets](#websockets).
+- **A WebSocket client whose connection is reset** (not closed) is logged as an error, `Unhandled
+  exception in a coroutine: ... Connection reset by the client` ([phasync/swerve#7](https://github.com/phasync/swerve/issues/7)).
+  Nothing else goes wrong: its callback ends, as for any client that leaves.
 - **A `StreamedResponse` is not slowed down by a slow client**: what it echoes faster than the
   client reads is kept in memory. Send files with `BinaryFileResponse`, which is read as the
   client takes it.

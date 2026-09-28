@@ -38,7 +38,9 @@ use Symfony\Component\Runtime\SymfonyRuntime;
  * request's; Symfony resets the services (kernel.reset) when the kernel starts its next request,
  * as with Symfony Runtime's FrankenPHP and Swoole runners. terminate() runs after the response,
  * and the kernel goes back to the pool after it. StreamedResponse and BinaryFileResponse are
- * sent as they are produced, the kernel held until they end.
+ * sent as they are produced, the kernel held until they end. A PSR-7 response from a controller,
+ * such as a WebSocket's 101, releases the kernel at once: its body or callback must not use the
+ * kernel's services.
  */
 final class Handler implements RequestHandlerInterface
 {
