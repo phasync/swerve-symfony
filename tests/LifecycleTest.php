@@ -14,13 +14,15 @@ it('finishes a slow request on SIGTERM, and logs no error', function () {
     \proc_terminate($proc, \SIGTERM);
     $response = \stream_get_contents($socket);
     \fclose($socket);
-    for ($deadline = \microtime(true) + 5; \proc_get_status($proc)['running'] && \microtime(true) < $deadline;) {
+    // The exit code as proc_get_status() saw it: before PHP 8.3, proc_close() then returns -1
+    for ($deadline = \microtime(true) + 5; ($status = \proc_get_status($proc))['running'] && \microtime(true) < $deadline;) {
         \usleep(50_000);
     }
+    \proc_close($proc);
 
     expect($response)->toStartWith('HTTP/1.1 200')
         ->and($response)->toEndWith('slow done')
-        ->and(\proc_close($proc))->toBe(0)
+        ->and($status['exitcode'])->toBe(0)
         ->and(\preg_grep('/error|exception|warning|fatal/i', \file($log)))->toBe([]);
 });
 
