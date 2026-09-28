@@ -130,3 +130,84 @@ function http_result(CurlHandle $curl, string|false $response): array
 
     return ['status' => \curl_getinfo($curl, \CURLINFO_RESPONSE_CODE), 'headers' => $headers, 'body' => \substr($response, $size)];
 }
+
+/**
+ * A WebSocket to $path, after the 101; $headers such as a Cookie go with the handshake.
+ *
+ * @return resource
+ */
+function ws_connect(string $addr, string $path = '/ws', array $headers = [])
+{
+    [$host, $port] = \explode(':', $addr);
+    $conn          = \stream_socket_client("tcp://$host:$port", timeout: 5);
+    \stream_set_timeout($conn, 5);
+    $key = \base64_encode(\random_bytes(16));
+    \fwrite($conn, "GET $path HTTP/1.1\r\nHost: $host\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\n" . \implode('', \array_map(static fn ($h) => "$h\r\n", $headers)) . "\r\n");
+    $head = '';
+    while (!\str_ends_with($head, "\r\n\r\n") && '' !== ($byte = (string) \fread($conn, 1))) {
+        $head .= $byte;
+    }
+    expect($head)->toStartWith('HTTP/1.1 101')
+        ->and($head)->toContain('Sec-WebSocket-Accept: ' . \base64_encode(\sha1($key . '258EAFA5-E914-47DA-95CA-C5AB0DC85B11', true)));
+
+    return $conn;
+}
+
+/** Send one frame, masked as a client must. */
+function ws_send($conn, int $opcode, string $payload): void
+{
+    $n    = \strlen($payload);
+    $mask = \random_bytes(4);
+    $head = \chr(0x80 | $opcode) . match (true) {
+        $n < 126   => \chr(0x80 | $n),
+        $n < 65536 => \chr(0x80 | 126) . \pack('n', $n),
+        default    => \chr(0x80 | 127) . \pack('J', $n),
+    };
+    \fwrite($conn, $head . $mask . ($payload ^ \substr(\str_repeat($mask, \intdiv($n, 4) + 1), 0, $n)));
+}
+
+/**
+ * The next frame from the server, as [opcode, payload], or null when the connection ended.
+ *
+ * @return array{0: int, 1: string}|null
+ */
+function ws_read($conn): ?array
+{
+    $read = static function (int $n) use ($conn): ?string {
+        for ($bytes = ''; \strlen($bytes) < $n; $bytes .= $chunk) {
+            if ('' === ($chunk = (string) \fread($conn, $n - \strlen($bytes)))) {
+                return null;
+            }
+        }
+
+        return $bytes;
+    };
+    if (null === ($head = $read(2))) {
+        return null;
+    }
+    $length = \ord($head[1]) & 0x7F;
+    if (126 === $length) {
+        $length = \unpack('n', $read(2))[1];
+    } elseif (127 === $length) {
+        $length = \unpack('J', $read(8))[1];
+    }
+
+    return [\ord($head[0]) & 0x0F, $length > 0 ? $read($length) : ''];
+}
+
+/**
+ * The WebSocket callbacks running in each worker, by pid, from /ws-live: asked until $workers
+ * workers answered.
+ *
+ * @return array<int, int>
+ */
+function ws_live(string $addr, int $workers = 2): array
+{
+    $live = [];
+    for ($i = 0; $i < 100 && \count($live) < $workers; ++$i) {
+        $data               = \json_decode(http($addr, 'GET', '/ws-live', [\CURLOPT_FORBID_REUSE => true])['body'], true);
+        $live[$data['pid']] = $data['live'];
+    }
+
+    return $live;
+}

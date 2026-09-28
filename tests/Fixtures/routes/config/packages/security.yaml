@@ -6,6 +6,7 @@ security:
             memory:
                 users:
                     alice: { password: secret, roles: [ROLE_USER] }
+                    bob: { password: secret, roles: [ROLE_USER] }
     firewalls:
         main:
             lazy: true

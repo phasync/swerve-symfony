@@ -1,8 +1,7 @@
 <?php
 
 /*
- * StreamedResponse and Server-Sent Events arrive as they are produced; a WebSocket from a
- * controller.
+ * StreamedResponse and Server-Sent Events arrive as they are produced.
  */
 
 /** Chunks of a response as they arrive, with the time each arrived; $stop ends it early. */
@@ -47,25 +46,4 @@ it('stops a Server-Sent Events producer when the client leaves', function () {
         \usleep(50_000);
     }
     expect(\file_exists($stopped))->toBeTrue();
-});
-
-it('holds a WebSocket returned by a controller', function () {
-    [$host, $port] = \explode(':', app());
-    $socket        = \stream_socket_client("tcp://$host:$port", timeout: 5);
-    $key           = \base64_encode(\random_bytes(16));
-    \fwrite($socket, "GET /ws HTTP/1.1\r\nHost: $host\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\n\r\n");
-    $head = '';
-    while (!\str_ends_with($head, "\r\n\r\n") && !\feof($socket)) {
-        $head .= \fread($socket, 1);
-    }
-    expect($head)->toStartWith('HTTP/1.1 101')
-        ->and($head)->toContain(\base64_encode(\sha1($key . '258EAFA5-E914-47DA-95CA-C5AB0DC85B11', true)));
-
-    $mask = \random_bytes(4);
-    \fwrite($socket, "\x81" . \chr(0x80 | 5) . $mask . ('hello' ^ \str_repeat($mask, 2)));
-    $frame = \fread($socket, 2);
-    $reply = \fread($socket, \ord($frame[1]));
-    \fclose($socket);
-
-    expect(\ord($frame[0]))->toBe(0x81)->and($reply)->toBe('echo: hello');
 });

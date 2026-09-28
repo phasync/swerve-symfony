@@ -3,8 +3,6 @@
 namespace App\Controller;
 
 use App\Service\RequestLabel;
-use Psr\Http\Message\ServerRequestInterface;
-use Swerve\Http\WebSocket;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -175,16 +173,6 @@ final class TestController extends AbstractController
     public function download(): Response
     {
         return $this->file($this->getParameter('kernel.project_dir') . '/composer.lock');
-    }
-
-    #[Route('/ws')]
-    public function websocket(Request $request): mixed
-    {
-        return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) {
-            foreach ($ws as $message) {
-                $ws->send("echo: $message");
-            }
-        });
     }
 
     #[Route('/slow')]
