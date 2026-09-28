@@ -1,0 +1,8 @@
+Running 10s test @ http://127.0.0.1:18791/usleep?ms=10
+  4 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency   179.60ms   84.38ms 526.30ms   74.47%
+    Req/Sec    89.86     18.74   151.00     59.50%
+  3587 requests in 10.02s, 542.95KB read
+Requests/sec:    357.83
+Transfer/sec:     54.16KB

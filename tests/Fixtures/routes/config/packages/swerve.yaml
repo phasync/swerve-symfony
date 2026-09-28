@@ -1,0 +1,18 @@
+# The sessions of the README: SessionStorageFactory, here with PdoSessionHandler on SQLite (WAL
+# mode, set when the database was made; synchronous=NORMAL, so a commit doesn't wait for fsync)
+framework:
+    session:
+        storage_factory_id: Swerve\Symfony\SessionStorageFactory
+        handler_id: session.handler.pdo
+
+services:
+    _defaults:
+        autowire: true
+    session.pdo:
+        class: PDO
+        arguments: ['sqlite:%kernel.project_dir%/var/sessions.db']
+        calls: [[exec, ['PRAGMA synchronous=NORMAL']]]
+    session.handler.pdo:
+        class: Symfony\Component\HttpFoundation\Session\Storage\Handler\PdoSessionHandler
+        arguments: ['@session.pdo', { lock_mode: 0 }]
+    Swerve\Symfony\SessionStorageFactory: ~

@@ -1,0 +1,19 @@
+security:
+    password_hashers:
+        Symfony\Component\Security\Core\User\InMemoryUser: plaintext
+    providers:
+        users:
+            memory:
+                users:
+                    alice: { password: secret, roles: [ROLE_USER] }
+    firewalls:
+        main:
+            lazy: true
+            provider: users
+            form_login:
+                login_path: login
+                check_path: login
+                default_target_path: me
+            logout:
+                path: logout
+                target: me

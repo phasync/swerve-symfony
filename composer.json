@@ -1,0 +1,43 @@
+{
+    "name": "phasync/swerve-symfony",
+    "description": "Run Symfony applications on swerve: booted once per worker, WebSockets and Server-Sent Events, no rewrite.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["symfony", "swerve", "phasync", "application server", "long-running", "psr-15", "websocket"],
+    "authors": [
+        {
+            "name": "Frode Børli",
+            "email": "frode@ennerd.com"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "phasync/swerve": "^0.1.0-alpha12",
+        "psr/http-server-handler": "^1.0",
+        "symfony/http-foundation": "^6.4 || ^7.0",
+        "symfony/http-kernel": "^6.4 || ^7.0",
+        "symfony/runtime": "^6.4 || ^7.0"
+    },
+    "require-dev": {
+        "pestphp/pest": "^3.0 || ^4.0",
+        "friendsofphp/php-cs-fixer": "^3.58"
+    },
+    "autoload": {
+        "psr-4": {
+            "Swerve\\Symfony\\": "src/"
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "scripts": {
+        "test": "@php vendor/bin/pest --stop-on-defect",
+        "php-cs-fixer": "vendor/bin/php-cs-fixer fix --verbose",
+        "php-cs-fixer-dry-run": "vendor/bin/php-cs-fixer fix --verbose --diff --dry-run"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true,
+            "symfony/runtime": true
+        }
+    }
+}
