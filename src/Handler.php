@@ -3,6 +3,7 @@
 namespace Swerve\Symfony;
 
 use phasync\IOException;
+use phasync\Psr\Response as PsrResponse;
 use phasync\Psr\UnbufferedStream;
 use phasync\TimeoutException;
 use phasync\Util\Pool;
@@ -10,7 +11,6 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\UploadedFileInterface;
 use Psr\Http\Server\RequestHandlerInterface;
-use Swerve\Http\Message\Response as PsrResponse;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\Request;
@@ -145,7 +145,7 @@ final class Handler implements RequestHandlerInterface
             \phasync::go($finish);
         }
 
-        return new PsrResponse($body, $headers, $response->getStatusCode(), null, $response->getProtocolVersion());
+        return new PsrResponse($response->getStatusCode(), $headers, $body, $response->getProtocolVersion());
     }
 
     private function toSymfony(ServerRequestInterface $psr): Request
