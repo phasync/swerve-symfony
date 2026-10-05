@@ -199,4 +199,11 @@ final class TestController extends AbstractController
 
         return new JsonResponse(['memory' => \memory_get_usage(), 'pid' => \getmypid()]);
     }
+
+    /** How many kernels this worker has booted: sockets must never make the pool grow. */
+    #[Route('/kernels-booted')]
+    public function kernelsBooted(): JsonResponse
+    {
+        return new JsonResponse(['booted' => \Swerve\Symfony\Handler::booted(), 'pid' => \getmypid()]);
+    }
 }

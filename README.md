@@ -16,39 +16,27 @@ composer config prefer-stable true         # everything else stays stable
 composer require phasync/swerve-symfony
 ```
 
-```php
-<?php // swerve.php, next to composer.json
-
-require __DIR__ . '/vendor/autoload.php';
-
-return new Swerve\Symfony\Handler(__DIR__);
-```
-
 ```bash
-vendor/bin/swerve --http=0.0.0.0:8080 --public=public swerve.php
+vendor/bin/swerve --http=0.0.0.0:8080 --public=public
 ```
 
 That's the whole setup, apart from [sessions](#sessions). `public/index.php` stays as it is, so
-the same application still runs under PHP-FPM.
-
-Named options: `kernels: 16`, the most kernels per worker, so the most requests a worker serves
-at once (see [Concurrency](#how-it-runs)); `frontController: 'public/index.php'`.
+the same application still runs under PHP-FPM: swerve finds this package's entry point from its
+own composer.json (`extra.swerve`), with no `swerve.php` of your own.
 
 ## WebSockets
 
-A controller returns `Swerve\Http\WebSocket::from()`, a PSR-7 response, with the callback that
-runs on the connection. The PSR-7 request it needs is the request attribute
-`Psr\Http\Message\ServerRequestInterface`:
+A controller returns `Swerve\Symfony\WebSocketResponse::from()`, an ordinary Symfony `Response`,
+with the callback that runs on the connection:
 
 ```php
-use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\ServerRequestInterface;
-use Swerve\Http\WebSocket;
+use Swerve\Symfony\WebSocketResponse;
+use Swerve\WebSocket;
 
 #[Route('/chat')]
-public function chat(Request $request): ResponseInterface
+public function chat(Request $request): Response
 {
-    return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) {
+    return WebSocketResponse::from($request, static function (WebSocket $ws) {
         foreach ($ws as $message) {                     // text or binary, until the client leaves
             $ws->isBinary() ? $ws->sendBinary($message) : $ws->send("echo: $message");
         }
@@ -58,16 +46,20 @@ public function chat(Request $request): ResponseInterface
 
 An ordinary `GET` to the route is answered `426 Upgrade Required`. A connection holds no kernel:
 the kernel goes back to the pool with the `101`, so a worker holds hundreds of sockets and
-serves requests beside them with as few kernels as those requests need.
+serves requests beside them with as few kernels as those requests need. Outbound frames are
+`echo`ed and `flush()`ed inside a Symfony `StreamedResponse` callback (`$response->getCallback()`,
+`setCallback()`), so a `kernel.response` listener may wrap it, or do its own `ob_start()`, to see
+every one; a listener that changes the response's status (a `403`, say) sends that response, with
+an empty body, and the handler never runs.
 
 **Server push.** A callback that only forwards a topic ends when its client leaves, and any
 route, in any worker, publishes to it:
 
 ```php
 #[Route('/news', methods: ['GET'])]
-public function news(Request $request): ResponseInterface
+public function news(Request $request): Response
 {
-    return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) {
+    return WebSocketResponse::from($request, static function (WebSocket $ws) {
         foreach (Swerve::subscribe('news') as $message) {
             $ws->send($message);
         }
@@ -86,16 +78,16 @@ public function publish(Request $request): Response
 **The user and the session: take them first.** The callback runs after the kernel went back to
 the pool, when its services (the security token storage, the `RequestStack`, the session, your
 own) serve whichever request comes next: read inside the callback, `$this->getUser()` may give
-another user. Take what the callback needs before `WebSocket::from()`, and pass it in:
+another user. Take what the callback needs before `WebSocketResponse::from()`, and pass it in:
 
 ```php
 #[Route('/me')]
-public function me(Request $request): ResponseInterface
+public function me(Request $request): Response
 {
     $user = $this->getUser()?->getUserIdentifier();
     $cart = $request->getSession()->get('cart', []);
 
-    return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) use ($user, $cart) {
+    return WebSocketResponse::from($request, static function (WebSocket $ws) use ($user, $cart) {
         foreach ($ws as $message) {
             $ws->send("$user: $message");
         }
@@ -105,8 +97,25 @@ public function me(Request $request): ResponseInterface
 
 A `static` closure keeps `$this` (the controller and its container) out of it. On a shutdown or
 reload, open sockets are closed with `1001`, and the worker exits once their callbacks end.
-Take the PSR-7 request from the attribute, not from a resolver of symfony/psr-http-message-bridge:
-that one is made from the `Request`, with no connection behind its body.
+
+## Server-Sent Events
+
+No class of this package's own: a `StreamedResponse` (or Symfony 7.3's native
+`EventStreamResponse`) with `text/event-stream` streams like any other, through the same path as
+[Streaming](#how-it-runs) below. `flush()` after each `echo` sends it at once:
+
+```php
+#[Route('/ticks')]
+public function ticks(): StreamedResponse
+{
+    return new StreamedResponse(static function () {
+        foreach (Swerve::subscribe('ticks') as $tick) {
+            echo "data: $tick\n\n";
+            \flush();
+        }
+    }, 200, ['Content-Type' => 'text/event-stream', 'Cache-Control' => 'no-cache']);
+}
+```
 
 ## What changes
 
@@ -127,25 +136,27 @@ The Symfony 7.4 skeleton, 4 workers each, requests per second:
   `Symfony\Component\Runtime\SymfonyRuntime` resolves it as under PHP-FPM: `.env` files,
   `APP_ENV`, `APP_DEBUG`, `extra.runtime` options in composer.json. One kernel is booted.
   `APP_RUNTIME_MODE` is `web=1&worker=1`, as Symfony's FrankenPHP runner sets it.
-- **Per request:** the request is converted to an HttpFoundation `Request` (the body read,
-  uploads as `UploadedFile`), borrows a kernel of its own from a pool (`phasync\Util\Pool`), and
-  `handle()` runs. The response goes back as PSR-7; `kernel.terminate` runs once swerve has it
-  (as after `fastcgi_finish_request()`), and the kernel returns to the pool. Symfony resets the
-  kernel's services (`services_resetter`, every `kernel.reset` service) when it starts its next
-  request, as with Symfony Runtime's FrankenPHP and Swoole runners.
+- **Per request:** swerve's `ClientRequest` is converted straight to an HttpFoundation `Request`
+  (the body read, uploads as `UploadedFile`, swerve's own `Swerve\Psr\FormBody` doing the
+  parsing) with no PSR-7 in between; the request borrows a kernel of its own from a pool
+  (`phasync\Util\Pool`), and `handle()` runs. The `Response` is sent straight back to the
+  `ClientRequest` the same way; `kernel.terminate` runs once swerve has it (as after
+  `fastcgi_finish_request()`), and the kernel returns to the pool. Symfony resets the kernel's
+  services (`services_resetter`, every `kernel.reset` service) when it starts its next request,
+  as with Symfony Runtime's FrankenPHP and Swoole runners.
 - **Concurrency:** a kernel serves one request at a time, so its `RequestStack`, security token,
-  session and stateful services belong to that request alone. With phasync-ext, a request
-  waiting for I/O (MySQL, curl, `sleep()`) lets the worker serve others: the pool then makes
-  more kernels, up to `kernels:` (16 by default). Each kernel after the first cost about 120 KiB
+  session and stateful services belong to that request alone. The pool has no cap: it makes a
+  kernel whenever every existing one is busy, so with phasync-ext, a request waiting for I/O
+  (MySQL, curl, `sleep()`) lets the worker serve others on one of its own; idle kernels beyond
+  the peak used in the last 30 seconds are let go. Each kernel after the first costs about 120 KiB
   in the test application (security, Twig, sessions), since the classes and the compiled
   container are shared. Without phasync-ext requests rarely overlap, and the pool stays at one.
-  `kernels: 1` serves one request at a time per worker.
 - **Streaming:** a `StreamedResponse` is sent as its callback echoes; a `BinaryFileResponse` as
   the client reads it, with `Range` support. Both hold their kernel until they end. When the
   client leaves, the callback's next `echo` throws, ending it as PHP-FPM ends a script.
-- **PSR-7 from controllers:** a controller may return a PSR-7 response, which swerve gets as it
-  is, such as a [WebSocket](#websockets). The PSR-7 request is the
-  `Psr\Http\Message\ServerRequestInterface` request attribute.
+- **WebSockets from controllers:** a controller may return a `WebSocketResponse`
+  ([above](#websockets)), which swerve sends as a `101` and then runs, the kernel already back in
+  the pool.
 
 ### Sessions
 
@@ -182,19 +193,16 @@ saves, as in PHP.
 - **Process-wide state is shared by the kernels of a worker.** `\Locale::setDefault()` (which
   `Request::setLocale()` calls), `setlocale()`, `date_default_timezone_set()` and static
   properties of your own code change for every request of the worker. Pass the locale to
-  formatters explicitly, or use `kernels: 1`: then a slow request also holds up the other
-  connections of its worker, since Linux
-  hands new connections to the workers regardless of how busy they are.
+  formatters explicitly.
 - **Output buffering is one stack per process.** Each `StreamedResponse`'s output reaches its
   own response, but a callback that does `ob_start()`, waits, then `ob_get_clean()` may catch
-  another request's output: don't wait inside your own output buffer, or use `kernels: 1`.
-  `echo` in a controller (not in a `StreamedResponse`) goes to swerve's log, not the response.
+  another request's output: don't wait inside your own output buffer. `echo` in a controller
+  (not in a `StreamedResponse`) goes to swerve's log, not the response.
 - **A `StreamedResponse` holds a kernel until it ends**, so each open Server-Sent Events stream
-  takes one: set `kernels:` above the streams a worker holds at once, or return a PSR-7
-  response with a `phasync\Psr\UnbufferedStream` body fed by a coroutine, which holds none.
-  Code that runs after the controller returned (such a coroutine, a WebSocket callback) must not
-  use the kernel's services, which serve the next request by then: take the user and session
-  data first, as in [WebSockets](#websockets).
+  takes one; the pool has no cap, so this costs memory (a kernel each), not a queue. Code that
+  runs after the controller returned (a `WebSocket` callback) must not use the kernel's services,
+  which serve the next request by then: take the user and session data first, as in
+  [WebSockets](#websockets).
 - **A WebSocket client whose connection is reset** (not closed) is logged as an error, `Unhandled
   exception in a coroutine: ... Connection reset by the client` ([phasync/swerve#7](https://github.com/phasync/swerve/issues/7)).
   Nothing else goes wrong: its callback ends, as for any client that leaves.

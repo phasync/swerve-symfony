@@ -27,14 +27,3 @@ it('keeps 10 overlapping requests apart: request, route, main request, service, 
         ->and(\json_decode($anonymous['body'], true)['sessionBefore'])->toBeNull()
         ->and($anonymous['headers']['set-cookie'][0])->toStartWith('PHPSESSID=');
 });
-
-it('serves one request at a time per worker with kernels: 1, still apart', function () {
-    [$proc, $addr] = app_start(1, ['KERNELS' => '1']);
-    $start         = \microtime(true);
-    $responses     = http_all($addr, [['GET', '/isolation/a?sleep=0.3', [], null], ['GET', '/isolation/b?sleep=0.3', [], null], ['GET', '/isolation/c?sleep=0.3', [], null]]);
-    $elapsed       = \microtime(true) - $start;
-    app_stop($proc);
-
-    expect(\array_map(static fn ($response) => \json_decode($response['body'], true)['service'], $responses))->toBe(['a', 'b', 'c'])
-        ->and($elapsed)->toBeGreaterThan(0.85);
-});

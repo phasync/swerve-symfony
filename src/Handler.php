@@ -2,47 +2,42 @@
 
 namespace Swerve\Symfony;
 
-use phasync\IOException;
-use phasync\Psr\Response as PsrResponse;
-use phasync\Psr\UnbufferedStream;
-use phasync\TimeoutException;
+use phasync;
+use phasync\Psr\ServerRequest as PsrServerRequest;
 use phasync\Util\Pool;
-use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\UploadedFileInterface;
-use Psr\Http\Server\RequestHandlerInterface;
+use Swerve\ClientRequest;
+use Swerve\Psr\FormBody;
+use Swerve\Psr\RequestBody;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
-use Symfony\Component\HttpKernel\Event\ViewEvent;
 use Symfony\Component\HttpKernel\HttpKernelInterface;
-use Symfony\Component\HttpKernel\KernelEvents;
 use Symfony\Component\HttpKernel\KernelInterface;
 use Symfony\Component\HttpKernel\TerminableInterface;
 use Symfony\Component\Runtime\SymfonyRuntime;
 
 /**
- * A Symfony application as swerve's request handler, from the project's swerve.php:
- *
- *     return new Swerve\Symfony\Handler(__DIR__);
+ * A Symfony application driven directly from swerve's {@see ClientRequest}: no PSR-7 in between.
+ * Built once per worker by {@see entry()}.
  *
  * Once per worker: the front controller (public/index.php) gives the closure that makes the
  * kernel, resolved by Symfony Runtime as under PHP-FPM (.env files, APP_ENV, APP_DEBUG), and one
  * kernel is booted.
  *
- * Per request: the request borrows a kernel of its own from a pool, which makes more, up to
- * $kernels, while requests overlap (with phasync-ext, whenever one waits for I/O). A kernel
- * serves one request at a time, so its RequestStack, session and stateful services are that
- * request's; Symfony resets the services (kernel.reset) when the kernel starts its next request,
- * as with Symfony Runtime's FrankenPHP and Swoole runners. terminate() runs after the response,
- * and the kernel goes back to the pool after it. StreamedResponse and BinaryFileResponse are
- * sent as they are produced, the kernel held until they end. A PSR-7 response from a controller,
- * such as a WebSocket's 101, releases the kernel at once: its body or callback must not use the
- * kernel's services.
+ * Per request: the request borrows a kernel from a pool, which makes one whenever all the
+ * existing ones are busy (no cap: one kernel per request overlapping with others, see
+ * `phasync\Util\Pool`) and keeps the peak of the last 30 s. A kernel serves one request at a
+ * time, so its RequestStack, session and stateful services are that request's; Symfony resets
+ * the services (kernel.reset) when the kernel starts its next request, as with Symfony
+ * Runtime's FrankenPHP and Swoole runners. terminate() runs after the response, and the kernel
+ * goes back to the pool after it. StreamedResponse and BinaryFileResponse are sent as they are
+ * produced, the kernel held until they end. A {@see WebSocketResponse} releases the kernel before
+ * its callback runs: a socket must not hold one of the pooled kernels.
  */
-final class Handler implements RequestHandlerInterface
+final class Handler
 {
     /** @var Pool<HttpKernelInterface> */
     private readonly Pool $kernels;
@@ -50,22 +45,19 @@ final class Handler implements RequestHandlerInterface
     /** @var array<string, mixed> as PHP-FPM would give it, less the per-request part */
     private readonly array $server;
 
-    /** @var \WeakMap<\Fiber, \WeakReference<UnbufferedStream>> where each coroutine sending a StreamedResponse echoes to */
+    /** @var \WeakMap<\Fiber, ClientRequest> the client each coroutine streaming a response writes to, see capture() */
     private static \WeakMap $outputs;
 
-    /** @var \WeakMap<Response, ResponseInterface> PSR-7 responses returned by controllers */
-    private static \WeakMap $psrResponses;
+    /** How many kernels this worker has ever booted: for tests, which check sockets hold none. */
+    private static int $booted = 0;
 
     /**
      * @param string $root            the application's root directory, where composer.json is
-     * @param int    $kernels         the most kernels per worker, so the most requests served at
-     *                                once; 1 serves one request at a time
      * @param string $frontController the front controller returning the kernel's closure, from $root
      */
-    public function __construct(string $root, int $kernels = 16, string $frontController = 'public/index.php')
+    public function __construct(string $root, string $frontController = 'public/index.php')
     {
         self::$outputs ??= new \WeakMap();
-        self::$psrResponses ??= new \WeakMap();
 
         // With the autoloader loaded, autoload_runtime.php returns at once, and the front
         // controller returns its closure instead of running
@@ -92,28 +84,27 @@ final class Handler implements RequestHandlerInterface
         ] + \array_diff_key($_SERVER, ['argv' => 1, 'argc' => 1]);
 
         $this->kernels = new Pool(static function () use ($app, $arguments): HttpKernelInterface {
+            ++self::$booted;
             $kernel = $app(...$arguments);
             if ($kernel instanceof KernelInterface) {
                 $kernel->boot();
-                // A controller may return a PSR-7 response, such as Swerve\Http\WebSocket::from()'s
-                $kernel->getContainer()->get('event_dispatcher')->addListener(KernelEvents::VIEW, static function (ViewEvent $event) {
-                    $psr = $event->getControllerResult();
-                    if ($psr instanceof ResponseInterface) {
-                        $event->setResponse($response = new Response('', $psr->getStatusCode(), $psr->getHeaders()));
-                        self::$psrResponses[$response] = $psr;
-                    }
-                });
             }
 
             return $kernel;
-        }, $kernels);
+        }, \PHP_INT_MAX, window: 30.0);
         // The first now, at the worker's start; the others when requests overlap
         $this->kernels->release($this->kernels->borrow());
     }
 
-    public function handle(ServerRequestInterface $psrRequest): ResponseInterface
+    /** How many kernels this worker has booted so far, for tests. */
+    public static function booted(): int
     {
-        $request = $this->toSymfony($psrRequest);
+        return self::$booted;
+    }
+
+    public function handle(ClientRequest $client): void
+    {
+        $request = $this->toSymfony($client);
         $kernel  = $this->kernels->borrow();
         try {
             $response = $kernel->handle($request);
@@ -132,50 +123,79 @@ final class Handler implements RequestHandlerInterface
                 $this->kernels->release($kernel);
             }
         };
-
-        $headers = $response->headers->allPreserveCaseWithoutCookies();
-        foreach ($response->headers->getCookies() as $cookie) {
-            $headers['Set-Cookie'][] = (string) $cookie;
-        }
-        $empty = 'HEAD' === $request->getMethod() || $response->isInformational() || $response->isEmpty();
-        if (!$empty && ($response instanceof StreamedResponse || $response instanceof BinaryFileResponse)) {
-            $body = $this->stream($response, $finish); // runs $finish when it ends
-        } else {
-            $body = isset(self::$psrResponses[$response]) ? self::$psrResponses[$response]->getBody() : ($empty ? '' : (string) $response->getContent());
-            \phasync::go($finish);
-        }
-
-        return new PsrResponse($response->getStatusCode(), $headers, $body, $response->getProtocolVersion());
+        $this->send($client, $request, $response, $finish);
     }
 
-    private function toSymfony(ServerRequestInterface $psr): Request
+    private function toSymfony(ClientRequest $client): Request
     {
-        $uri    = $psr->getUri();
-        $server = [
-            'SERVER_NAME'  => $uri->getHost(),
-            'SERVER_PORT'  => $uri->getPort() ?? ('https' === $uri->getScheme() ? 443 : 80),
-            'QUERY_STRING' => $uri->getQuery(),
-        ] + $psr->getServerParams() + $this->server;
-        if ('https' === $uri->getScheme()) {
+        $method        = $client->getMethod();
+        $target        = $client->getTarget();
+        $headers       = $client->getRequestHeaders();
+        $now           = \microtime(true);
+        [$host, $port] = self::hostPort($headers['host'][0] ?? '', 'https' === $client->getScheme() ? 443 : 80);
+        $server        = [
+            'SERVER_NAME'        => $host,
+            'SERVER_PORT'        => $port,
+            'REQUEST_METHOD'     => $method,
+            'REQUEST_URI'        => $target,
+            'QUERY_STRING'       => \parse_url($target, \PHP_URL_QUERY) ?: '',
+            'SERVER_PROTOCOL'    => 'HTTP/' . $client->getProtocolVersion(),
+            'REQUEST_TIME'       => (int) $now,
+            'REQUEST_TIME_FLOAT' => $now,
+        ] + $this->server;
+        if ('https' === $client->getScheme()) {
             $server['HTTPS'] = 'on';
         }
-        foreach ($psr->getHeaders() as $name => $values) {
+        if (\preg_match('/^\[?(.+?)\]?:(\d+)$/', $client->peer(), $peer)) {
+            $server['REMOTE_ADDR'] = $peer[1];
+            $server['REMOTE_PORT'] = (int) $peer[2];
+        }
+        foreach ($headers as $name => $values) {
             $name                                                                                  = \strtoupper(\strtr($name, '-', '_'));
             $server['CONTENT_TYPE' === $name || 'CONTENT_LENGTH' === $name ? $name : "HTTP_$name"] = \implode(', ', $values);
         }
-        $parsed = $psr->getParsedBody();
-        $files  = self::files($psr->getUploadedFiles());
-        // The body is read now, as PHP-FPM does, but not an upgrade's (a WebSocket's): its body
-        // is the connection, and reading it here would refuse the upgrade
-        $upgrade = $psr->hasHeader('Upgrade') && !$psr->hasHeader('Content-Length') && !$psr->hasHeader('Transfer-Encoding');
-        $request = new Request($psr->getQueryParams(), \is_array($parsed) ? $parsed : [], [], $psr->getCookieParams(), $files, $server, $upgrade ? '' : $psr->getBody()->getContents());
-        // For WebSocket::from() in a controller; it also keeps the uploads' temporary files
-        $request->attributes->set(ServerRequestInterface::class, $psr);
+
+        $query = [];
+        \parse_str($server['QUERY_STRING'], $query);
+        $cookies = isset($headers['cookie']) ? PsrServerRequest::cookies(\implode('; ', $headers['cookie'])) : [];
+
+        // A request has a body when it says so; its length is known unless it is chunked. An
+        // upgrade request (a WebSocket handshake) never has one: its body is the connection
+        // itself, read lazily by WebSocketResponse, never buffered here.
+        $upgrade = isset($headers['upgrade']) && !isset($headers['content-length']) && !isset($headers['transfer-encoding']);
+        if ($upgrade) {
+            $request = new Request($query, [], [], $cookies, [], $server, ClientRequestStream::open($client));
+        } else {
+            $size   = isset($headers['transfer-encoding']) ? null : (int) ($headers['content-length'][0] ?? 0);
+            $body   = new RequestBody($client, $size);
+            $form   = isset($headers['content-type']) ? FormBody::for($method, $headers['content-type'][0], $body) : null;
+            // fields()/files() parse the body (lazily, once); input() is only correct once that
+            // has happened, since parsing is what leaves it still readable (or empty)
+            $fields  = $form?->fields() ?? [];
+            $files   = self::files($form?->files() ?? []);
+            $content = $form ? $form->input()->getContents() : $body->getContents();
+            $request = new Request($query, $fields, [], $cookies, $files, $server, $content);
+            if (null !== $form) {
+                // Keeps the uploads' temporary files for as long as $request lives: FormBody
+                // deletes them (__destruct()) once nothing references it any more
+                $request->attributes->set(FormBody::class, $form);
+            }
+        }
 
         return $request;
     }
 
-    /** $_FILES as Symfony has it, from PSR-7 uploaded files: no file is null. */
+    /** The host and port from a Host header (which may carry its own port), with a default port. */
+    private static function hostPort(string $host, int $defaultPort): array
+    {
+        if (\preg_match('/^(.*):(\d+)$/', $host, $m)) {
+            return [$m[1], (int) $m[2]];
+        }
+
+        return [$host, $defaultPort];
+    }
+
+    /** $_FILES as Symfony has it, from PSR-7 uploaded files (Swerve\Psr\FormBody::files()): no file is null. */
     private static function files(array $files): array
     {
         foreach ($files as $key => $file) {
@@ -190,64 +210,99 @@ final class Handler implements RequestHandlerInterface
         return $files;
     }
 
-    /**
-     * The body of a StreamedResponse or BinaryFileResponse, produced by a coroutine that holds
-     * the kernel until it ends, and then runs $finish.
-     */
-    private function stream(StreamedResponse|BinaryFileResponse $response, \Closure $finish): UnbufferedStream
+    /** Send the Symfony response to the client: the head, the body (as it is produced for a stream), and the end. */
+    private function send(ClientRequest $client, Request $request, Response $response, \Closure $finish): void
     {
-        // A StreamedResponse echoes inside an output handler, which can't wait for the client:
-        // its buffer is unlimited. A file is read as the client takes it.
-        $body = $response instanceof StreamedResponse ? new UnbufferedStream(\PHP_INT_MAX, \PHP_FLOAT_MAX) : new UnbufferedStream();
-        // Held weakly: when the client leaves, swerve drops the body, and the producer stops
-        $out = \WeakReference::create($body);
-        \phasync::go(static function () use ($response, $out, $finish) {
-            try {
-                if ($response instanceof BinaryFileResponse) {
-                    self::sendFile($response, $out);
-                } else {
-                    self::$outputs[\Fiber::getCurrent()] = $out;
-                    \ob_start(self::capture(...), 1);
-                    try {
-                        $response->sendContent();
-                    } finally {
-                        \ob_end_clean();
-                    }
-                }
-            } catch (IOException|TimeoutException $e) {
-                if (null !== $out->get()) {
-                    throw $e;
-                }
-            } finally {
-                $out->get()?->end();
-                $finish();
-            }
-        });
+        $headers = $response->headers->allPreserveCaseWithoutCookies();
+        foreach ($response->headers->getCookies() as $cookie) {
+            $headers['Set-Cookie'][] = (string) $cookie;
+        }
+        $isWebSocket = $response instanceof WebSocketResponse;
+        if ($isWebSocket && 101 === $response->getStatusCode()) {
+            $client->sendResponseHeaders(101, $headers);
+            $client->flush();
+            $finish(); // the kernel goes back to the pool before the socket's callback runs
+            self::runWebSocket($client, $response);
+            $client->end();
 
-        return $body;
+            return;
+        }
+        // A WebSocketResponse whose status a kernel.response listener changed sends no body: the
+        // handler, which only `sendContent()` would start, never ran
+        $empty   = $isWebSocket || 'HEAD' === $request->getMethod() || $response->isInformational() || $response->isEmpty();
+        $stream  = !$empty && ($response instanceof StreamedResponse || $response instanceof BinaryFileResponse);
+        $content = $empty || $stream ? '' : (string) $response->getContent();
+        if (!$empty && !$stream && !isset($headers['Content-Length']) && !isset($headers['content-length'])) {
+            $headers['Content-Length'] = (string) \strlen($content);
+        }
+        $client->sendResponseHeaders($response->getStatusCode(), $headers);
+        if ($stream) {
+            $this->stream($client, $response, $finish);
+
+            return;
+        }
+        if (!$empty) {
+            $client->write($content);
+        }
+        $client->end();
+        \phasync::go($finish);
     }
 
     /**
-     * The output handler of StreamedResponse callbacks, which gets every echo at once (chunk
-     * size 1). Output buffers are one stack for the whole process, and any of these handlers may
-     * be on top, so each gives the output to the body of the coroutine that echoed it.
+     * The body of a StreamedResponse or BinaryFileResponse, written to the client as it is
+     * produced; $finish runs once it ends, before end()'s next read, so the kernel is held for
+     * exactly as long as the body takes.
+     */
+    private function stream(ClientRequest $client, StreamedResponse|BinaryFileResponse $response, \Closure $finish): void
+    {
+        try {
+            if ($response instanceof BinaryFileResponse) {
+                self::sendFile($client, $response);
+            } else {
+                self::sendStreamed($client, $response);
+            }
+        } finally {
+            $client->end();
+            $finish();
+        }
+    }
+
+    /** A StreamedResponse's callback, echoing into this coroutine's slot of the output buffer. */
+    private static function sendStreamed(ClientRequest $client, StreamedResponse $response): void
+    {
+        $fiber                  = \Fiber::getCurrent();
+        self::$outputs[$fiber]  = $client;
+        \ob_start(self::capture(...), 1);
+        try {
+            $response->sendContent();
+        } finally {
+            \ob_end_clean();
+            unset(self::$outputs[$fiber]);
+        }
+    }
+
+    /**
+     * The output handler of a StreamedResponse's callback, which gets every echo at once (chunk
+     * size 1): writes it to the client of the coroutine that echoed it. Output buffers are one
+     * stack for the whole process, and any of these handlers may be on top, so each only acts on
+     * its own coroutine's output and passes any other through. A write that fails (the client
+     * left) throws, ending the callback as a script under PHP-FPM ends when its client left.
      */
     private static function capture(string $buffer): string
     {
         $fiber = \Fiber::getCurrent();
         if (null === $fiber || !isset(self::$outputs[$fiber])) {
-            return $buffer; // not a StreamedResponse's: on to the next buffer, or the terminal
+            return $buffer; // not one of ours: on to the next buffer, or the terminal
         }
         if ('' !== $buffer) {
-            // Throwing ends the callback, as a script under PHP-FPM ends when its client left
-            (self::$outputs[$fiber]->get() ?? throw new IOException('The client left'))->append($buffer);
+            self::$outputs[$fiber]->write($buffer);
         }
 
         return '';
     }
 
-    /** What BinaryFileResponse::sendContent() writes, read as the client takes it. */
-    private static function sendFile(BinaryFileResponse $response, \WeakReference $out): void
+    /** What BinaryFileResponse would stream, sent with ClientRequest::sendFile(): a Range included. */
+    private static function sendFile(ClientRequest $client, BinaryFileResponse $response): void
     {
         [$offset, $length, $temporary, $delete] = (fn () => [$this->offset, $this->maxlen, $this->tempFileObject ?? null, $this->deleteFileAfterSend])->call($response);
         $path                                   = $response->getFile()->getPathname();
@@ -255,20 +310,27 @@ final class Handler implements RequestHandlerInterface
             if (!$response->isSuccessful() || 0 === $length) {
                 return;
             }
-            $file = $temporary ?? new \SplFileObject($path, 'r');
-            $file->fseek($offset);
-            while (0 !== $length && !$file->eof()) {
-                $data = $file->fread($length > 0 ? \min($length, 65536) : 65536);
-                if (false === $data || '' === $data) {
-                    break;
+            if (null !== $temporary) {
+                $client->sendFile($temporary->getResource(), $offset, $length > 0 ? $length : null);
+            } else {
+                $stream = \fopen($path, 'rb');
+                try {
+                    $client->sendFile($stream, $offset, $length > 0 ? $length : null);
+                } finally {
+                    \fclose($stream);
                 }
-                ($out->get() ?? throw new IOException('The client left'))->append($data);
-                $length -= $length > 0 ? \strlen($data) : 0;
             }
         } finally {
             if (null === $temporary && $delete && \is_file($path)) {
                 \unlink($path);
             }
         }
+    }
+
+    /** Run a WebSocketResponse's callback: its connection ({@see WebSocketDuplex}) sends to $client. */
+    private static function runWebSocket(ClientRequest $client, WebSocketResponse $response): void
+    {
+        WebSocketDuplex::bind($client);
+        $response->sendContent();
     }
 }

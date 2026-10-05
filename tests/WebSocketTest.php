@@ -79,7 +79,7 @@ it('ends every callback when its client leaves, with or without a goodbye', func
 });
 
 it('gives each socket the user and session data taken before WebSocket::from()', function () {
-    [$proc, $addr] = app_start(1, ['KERNELS' => '1']); // one kernel: every request uses its services
+    [$proc, $addr] = app_start(1); // sequential requests on one worker: they share the one kernel the pool keeps idle
     try {
         $cookies = [];
         foreach (['alice' => 1, 'bob' => 2] as $user => $count) {
@@ -113,29 +113,20 @@ it('gives each socket the user and session data taken before WebSocket::from()',
     }
 });
 
-it('answers ordinary requests promptly beside 200 open sockets per worker, on 2 kernels', function () {
-    [$proc, $addr, $log] = app_start(2, ['KERNELS' => '2']);
+it('answers ordinary requests beside 20 open sockets, which never grow the kernel pool', function () {
+    [$proc, $addr, $log] = app_start(1);
     try {
         $clients = [];
-        for ($i = 0; $i < 600; ++$i) {
+        for ($i = 0; $i < 20; ++$i) {
             $clients[] = ws_connect($addr, 0 === $i % 2 ? '/ws' : '/ws/news');
         }
-        $live = ws_live($addr);
-        expect($live)->toHaveCount(2)->and(\array_sum($live))->toBe(600)->and(\min($live))->toBeGreaterThanOrEqual(200);
+        expect(\array_sum(ws_live($addr, 1)))->toBe(20)
+            // Sequential handshakes each borrowed and released the one kernel this worker booted:
+            // a socket that held one would have made the pool boot another for the next
+            ->and(\json_decode(http($addr, 'GET', '/kernels-booted')['body'], true)['booted'])->toBe(1);
 
-        // Sockets hold no kernel: requests get one of the 2 at once, also 16 at a time
-        $slowest = 0.0;
-        $kernels = [];
-        for ($i = 0; $i < 50; ++$i) {
-            $start                                  = \microtime(true);
-            $data                                   = \json_decode(http($addr, 'GET', '/ws-live', [\CURLOPT_FORBID_REUSE => true])['body'], true);
-            $slowest                                = \max($slowest, \microtime(true) - $start);
-            $kernels[$data['pid']][$data['kernel']] = true;
-        }
         $burst = http_all($addr, \array_fill(0, 16, ['GET', '/json', [], null]));
-        expect($slowest)->toBeLessThan(0.25)
-            ->and(\max(\array_map('count', $kernels)))->toBeLessThanOrEqual(2)
-            ->and(\array_column($burst, 'status'))->toBe(\array_fill(0, 16, 200));
+        expect(\array_column($burst, 'status'))->toBe(\array_fill(0, 16, 200));
 
         // And the sockets still work, each of them
         http($addr, 'POST', '/publish', [\CURLOPT_POSTFIELDS => 'still pushing']);
@@ -185,4 +176,25 @@ it('answers an ordinary GET to a WebSocket route with 426', function () {
     expect($response['status'])->toBe(426)
         ->and($response['headers']['upgrade'][0])->toBe('websocket')
         ->and($response['body'])->toBe('This address speaks WebSocket');
+});
+
+it('lets a kernel.response listener wrap the WebSocketResponse callback and log outbound frames', function () {
+    $id  = \bin2hex(\random_bytes(4));
+    $log = __DIR__ . "/Fixtures/app/var/ws-frames-$id";
+    $ws  = ws_connect(app(), "/ws/logged?log=$id");
+    ws_send($ws, 1, 'hi');
+    expect(ws_read($ws))->toBe([1, 'echo: hi']);
+    \fclose($ws);
+
+    for ($deadline = \microtime(true) + 5; !\file_exists($log) && \microtime(true) < $deadline;) {
+        \usleep(50_000);
+    }
+    expect(\file_get_contents($log))->toContain('echo: hi'); // the listener saw the frame, which still reached the client above
+});
+
+it('sends a WebSocketResponse whose status a listener changed as that response, with an empty body: the handler never runs', function () {
+    $response = http(app(), 'GET', '/ws/blocked', [\CURLOPT_HTTPHEADER => ['Expect:', 'Upgrade: websocket', 'Connection: Upgrade', 'Sec-WebSocket-Version: 13', 'Sec-WebSocket-Key: ' . \base64_encode(\random_bytes(16))]]);
+
+    expect($response['status'])->toBe(403)
+        ->and($response['body'])->toBe('');
 });

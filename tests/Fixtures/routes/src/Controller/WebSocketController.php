@@ -2,10 +2,9 @@
 
 namespace App\Controller;
 
-use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\ServerRequestInterface;
-use Swerve\Http\WebSocket;
 use Swerve\Swerve;
+use Swerve\Symfony\WebSocketResponse;
+use Swerve\WebSocket;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -22,9 +21,9 @@ final class WebSocketController extends AbstractController
 
     /** Text and binary messages echoed, each as it came. */
     #[Route('/ws')]
-    public function echo(Request $request): ResponseInterface
+    public function echo(Request $request): Response
     {
-        return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) {
+        return WebSocketResponse::from($request, static function (WebSocket $ws) {
             ++self::$live;
             try {
                 foreach ($ws as $message) {
@@ -38,9 +37,9 @@ final class WebSocketController extends AbstractController
 
     /** Everything published to 'news', forwarded: the callback only sends. */
     #[Route('/ws/news')]
-    public function news(Request $request): ResponseInterface
+    public function news(Request $request): Response
     {
-        return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) {
+        return WebSocketResponse::from($request, static function (WebSocket $ws) {
             ++self::$live;
             try {
                 foreach (Swerve::subscribe('news') as $message) {
@@ -62,12 +61,12 @@ final class WebSocketController extends AbstractController
 
     /** The user and the session's data, taken from the request before the connection. */
     #[Route('/ws/me')]
-    public function me(Request $request): ResponseInterface
+    public function me(Request $request): Response
     {
         $user  = $this->getUser()?->getUserIdentifier() ?? 'anonymous';
         $count = $request->getSession()->get('count', 0);
 
-        return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) use ($user, $count) {
+        return WebSocketResponse::from($request, static function (WebSocket $ws) use ($user, $count) {
             foreach ($ws as $message) {
                 $ws->send("$user (count $count): $message");
             }
@@ -79,11 +78,34 @@ final class WebSocketController extends AbstractController
      * kernel went back to the pool, when its services belong to whichever request came next.
      */
     #[Route('/ws/me-late')]
-    public function meLate(Request $request, TokenStorageInterface $tokens): ResponseInterface
+    public function meLate(Request $request, TokenStorageInterface $tokens): Response
     {
-        return WebSocket::from($request->attributes->get(ServerRequestInterface::class), static function (WebSocket $ws) use ($tokens) {
+        return WebSocketResponse::from($request, static function (WebSocket $ws) use ($tokens) {
             foreach ($ws as $message) {
                 $ws->send(($tokens->getToken()?->getUserIdentifier() ?? 'anonymous') . ": $message");
+            }
+        });
+    }
+
+    /** Echoes, like /ws: for WebSocketResponseListener to wrap the callback and log its frames. */
+    #[Route('/ws/logged', name: 'ws_logged')]
+    public function logged(Request $request): Response
+    {
+        return WebSocketResponse::from($request, static function (WebSocket $ws) {
+            foreach ($ws as $message) {
+                $ws->send("echo: $message");
+            }
+        });
+    }
+
+    /** Never runs: WebSocketResponseListener sets the response's status to 403 for this route. */
+    #[Route('/ws/blocked', name: 'ws_blocked')]
+    public function blocked(Request $request): Response
+    {
+        return WebSocketResponse::from($request, static function (WebSocket $ws) {
+            ++self::$live; // would show as a leak if the handler ran anyway
+            foreach ($ws as $message) {
+                $ws->send($message);
             }
         });
     }
