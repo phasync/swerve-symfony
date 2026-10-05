@@ -18,10 +18,10 @@ use Symfony\Component\Security\Http\Authentication\AuthenticationUtils;
 
 final class TestController extends AbstractController
 {
-    /** Wait as a coroutine: sleep() waits so with phasync-ext, phasync::sleep() without it. */
+    /** Wait as a coroutine, with or without phasync-ext. */
     private static function wait(float $seconds): void
     {
-        \extension_loaded('phasync') ? \usleep((int) ($seconds * 1e6)) : \phasync::sleep($seconds);
+        \phasync::sleep($seconds);
     }
 
     #[Route('/', name: 'home')]

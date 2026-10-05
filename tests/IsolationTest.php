@@ -1,8 +1,8 @@
 <?php
 
 /*
- * Requests that overlap on one worker each see only their own state. With phasync-ext, sleep()
- * lets the others run, as any I/O wait does; without it, phasync::sleep() does.
+ * Requests that overlap on one worker each see only their own state: phasync::sleep()
+ * lets the others run, as any I/O wait does.
  */
 
 it('keeps 10 overlapping requests apart: request, route, main request, service, user, session', function () {
