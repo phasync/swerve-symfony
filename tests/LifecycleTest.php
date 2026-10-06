@@ -40,9 +40,11 @@ it('keeps memory flat over 10,000 requests, once warm', function () {
     for ($i = 0; $i < 1_000; ++$i) {
         $get($paths($i));
     }
-    // Two windows of 10,000: a slow warm-up may still grow in the first, a leak grows in both
+    // Three windows of 10,000. A leak grows in every window; a slow warm-up grows in the first, and
+    // an array reaching a new peak size (PHP never shrinks one) grows now and then, in power-of-two
+    // steps, on a slow machine. So one of the later windows must stay flat.
     $growth = [];
-    for ($window = 0; $window < 2; ++$window) {
+    for ($window = 0; $window < 3; ++$window) {
         $before = \json_decode($get('/memory'), true)['memory'];
         for ($i = 0; $i < 10_000; ++$i) {
             $get($paths($i));
@@ -51,7 +53,7 @@ it('keeps memory flat over 10,000 requests, once warm', function () {
     }
     app_stop($proc);
 
-    expect($growth[1])->toBeLessThan(200_000, 'growth per window: ' . \implode(', ', $growth));
+    expect(\min($growth[1], $growth[2]))->toBeLessThan(200_000, 'growth per window: ' . \implode(', ', $growth));
 });
 
 it('runs in the dev environment, with debug on', function () {
