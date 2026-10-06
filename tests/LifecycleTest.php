@@ -26,7 +26,7 @@ it('finishes a slow request on SIGTERM, and logs no error', function () {
         ->and(\preg_grep('/error|exception|warning|fatal/i', \file($log)))->toBe([]);
 });
 
-it('keeps memory flat over 10,000 requests', function () {
+it('keeps memory flat over 10,000 requests, once warm', function () {
     [$proc, $addr] = app_start(1);
     $curl          = \curl_init();
     \curl_setopt($curl, \CURLOPT_RETURNTRANSFER, true);
@@ -40,14 +40,18 @@ it('keeps memory flat over 10,000 requests', function () {
     for ($i = 0; $i < 1_000; ++$i) {
         $get($paths($i));
     }
-    $before = \json_decode($get('/memory'), true)['memory'];
-    for ($i = 0; $i < 10_000; ++$i) {
-        $get($paths($i));
+    // Two windows of 10,000: a slow warm-up may still grow in the first, a leak grows in both
+    $growth = [];
+    for ($window = 0; $window < 2; ++$window) {
+        $before = \json_decode($get('/memory'), true)['memory'];
+        for ($i = 0; $i < 10_000; ++$i) {
+            $get($paths($i));
+        }
+        $growth[] = \json_decode($get('/memory'), true)['memory'] - $before;
     }
-    $after = \json_decode($get('/memory'), true)['memory'];
     app_stop($proc);
 
-    expect($after - $before)->toBeLessThan(200_000);
+    expect($growth[1])->toBeLessThan(200_000, 'growth per window: ' . \implode(', ', $growth));
 });
 
 it('runs in the dev environment, with debug on', function () {
