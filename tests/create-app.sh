@@ -1,8 +1,8 @@
 #!/bin/sh
 # Create the Symfony test application in tests/Fixtures/app, for Symfony version $1 (6.4, 7.4):
 # the framework's own skeleton, with this package installed from the checkout and the test
-# routes of tests/Fixtures/routes added. Idempotent. SWERVE_PATH, when set, installs phasync/swerve
-# from that directory instead of the one next to this checkout (../swerve).
+# routes of tests/Fixtures/routes added. Idempotent. phasync/swerve comes from Packagist; SWERVE_PATH,
+# when set, installs it from that directory instead (a local checkout of swerve).
 set -eu
 version=$1
 cd "$(dirname "$0")/Fixtures"
@@ -18,7 +18,11 @@ composer config prefer-stable true
 # repository: this checkout contains the fixture, and a path repository's symlink (or its copy)
 # would make the fixture's vendor contain the fixture, recursively
 php -r '$c = json_decode(file_get_contents("composer.json")); $c->autoload->{"psr-4"}->{"Swerve\\Symfony\\"} = "../../../src/"; $c->autoload->files = ["../../../src/functions.php"]; file_put_contents("composer.json", json_encode($c, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");'
-composer config repositories.swerve "{\"type\": \"path\", \"url\": \"${SWERVE_PATH:-../../../../swerve}\", \"options\": {\"symlink\": true, \"versions\": {\"phasync/swerve\": \"0.1.0-beta6\"}}}"
+if [ -n "${SWERVE_PATH:-}" ]; then
+    composer config repositories.swerve "{\"type\": \"path\", \"url\": \"$SWERVE_PATH\", \"options\": {\"symlink\": true, \"versions\": {\"phasync/swerve\": \"0.1.0-beta6\"}}}"
+else
+    composer config --unset repositories.swerve
+fi
 composer require --no-interaction --no-progress --no-scripts \
     "symfony/twig-bundle:$version.*" "symfony/security-bundle:$version.*" \
     "symfony/security-csrf:$version.*" "symfony/mime:$version.*" "phasync/swerve:^0.1.0-beta6"
