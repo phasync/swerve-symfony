@@ -38,18 +38,6 @@
             "entry": "Swerve\\Symfony\\entry"
         }
     },
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../swerve",
-            "options": {
-                "symlink": true,
-                "versions": {
-                    "phasync/swerve": "0.1.0-beta6"
-                }
-            }
-        }
-    ],
     "minimum-stability": "beta",
     "prefer-stable": true,
     "scripts": {
