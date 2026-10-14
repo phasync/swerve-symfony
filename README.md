@@ -11,8 +11,8 @@ request and response bodies, and hold WebSockets and Server-Sent Events. This pa
 run a Symfony application unchanged, and lets its controllers hold [WebSockets](#websockets).
 
 ```bash
-composer config minimum-stability beta   # while swerve is in beta
-composer config prefer-stable true         # everything else stays stable
+composer config minimum-stability dev    # phasync and swerve are on their development versions
+composer config prefer-stable true        # everything else stays stable
 composer require phasync/swerve-symfony
 ```
 
@@ -185,6 +185,9 @@ saves, as in PHP.
 ## Before you deploy
 
 - `exit` and `dd()` end the worker, and the requests it is serving with it.
+- **A stop ends the requests in flight.** On a shutdown or reload swerve stops a worker at once:
+  a request still waiting then ends, answered `503` by swerve when nothing was sent yet (the
+  kernel neither logs it nor renders an error page); clients retry.
 - **Sessions** need the configuration above. PHP's own handlers (files, the default) need the
   session module and are refused. The data is stored with `serialize()`, not PHP's session
   format, so sessions from before the switch are not read: users log in once more. With SQLite,

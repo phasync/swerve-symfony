@@ -1,7 +1,7 @@
 #!/bin/sh
 # Create the Symfony test application in tests/Fixtures/app, for Symfony version $1 (6.4, 7.4):
 # the framework's own skeleton, with this package installed from the checkout and the test
-# routes of tests/Fixtures/routes added. Idempotent. phasync/swerve comes from Packagist; SWERVE_PATH,
+# routes of tests/Fixtures/routes added. Idempotent. phasync/swerve dev-main comes from Packagist; SWERVE_PATH,
 # when set, installs it from that directory instead (a local checkout of swerve).
 set -eu
 version=$1
@@ -16,16 +16,17 @@ composer config minimum-stability dev
 composer config prefer-stable true
 # phasync/swerve-symfony from this checkout, by the fixture's own autoload rule, not a path
 # repository: this checkout contains the fixture, and a path repository's symlink (or its copy)
-# would make the fixture's vendor contain the fixture, recursively
-php -r '$c = json_decode(file_get_contents("composer.json")); $c->autoload->{"psr-4"}->{"Swerve\\Symfony\\"} = "../../../src/"; $c->autoload->files = ["../../../src/functions.php"]; file_put_contents("composer.json", json_encode($c, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");'
+# would make the fixture's vendor contain the fixture, recursively. A class map too: swerve's worker
+# loads the classes under the adapter's install path (src/, below) by their file paths
+php -r '$c = json_decode(file_get_contents("composer.json")); $c->autoload->{"psr-4"}->{"Swerve\\Symfony\\"} = "../../../src/"; $c->autoload->files = ["../../../src/functions.php"]; $c->autoload->classmap = ["../../../src/"]; file_put_contents("composer.json", json_encode($c, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");'
 if [ -n "${SWERVE_PATH:-}" ]; then
-    composer config repositories.swerve "{\"type\": \"path\", \"url\": \"$SWERVE_PATH\", \"options\": {\"symlink\": true, \"versions\": {\"phasync/swerve\": \"0.1.0-beta6\"}}}"
+    composer config repositories.swerve "{\"type\": \"path\", \"url\": \"$SWERVE_PATH\", \"options\": {\"symlink\": true, \"versions\": {\"phasync/swerve\": \"dev-main\"}}}"
 else
     composer config --unset repositories.swerve
 fi
-composer require --no-interaction --no-progress --no-scripts \
+composer require --no-interaction --no-progress --no-scripts --with-all-dependencies \
     "symfony/twig-bundle:$version.*" "symfony/security-bundle:$version.*" \
-    "symfony/security-csrf:$version.*" "symfony/mime:$version.*" "phasync/swerve:^0.1.0-beta6"
+    "symfony/security-csrf:$version.*" "symfony/mime:$version.*" "phasync/swerve:dev-main"
 cp -r ../routes/. .
 printf 'APP_ENV=prod\nAPP_DEBUG=0\nAPP_SECRET=swerve-symfony-tests\n' > .env.local
 rm -rf var
@@ -39,10 +40,9 @@ $file = "vendor/composer/installed.json";
 $data = json_decode(file_get_contents($file), true);
 $key  = isset($data["packages"]) ? "packages" : null;
 $list = $key ? $data[$key] : $data;
-foreach ($list as $p) {
-    if ("phasync/swerve-symfony" === $p["name"]) { exit; }
-}
-$list[] = ["name" => "phasync/swerve-symfony", "version" => "dev-checkout", "type" => "library", "extra" => ["swerve" => ["adapter" => "symfony", "entry" => "Swerve\\Symfony\\entry"]]];
+$list = array_values(array_filter($list, fn ($p) => "phasync/swerve-symfony" !== $p["name"]));
+// Its install path is the checkout'"'"'s src/: swerve'"'"'s worker loads the classes and files under it
+$list[] = ["name" => "phasync/swerve-symfony", "version" => "dev-checkout", "type" => "library", "install-path" => "../../../../../src", "extra" => ["swerve" => ["adapter" => "symfony", "entry" => "Swerve\\Symfony\\entry"]]];
 if ($key) { $data[$key] = $list; } else { $data = $list; }
 file_put_contents($file, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 '

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Requires phasync and swerve `dev-main`: phasync's `Scope` + `Frame`, and swerve's request model,
+  where each request runs in a `Scope` of its own. The adapter used no contexts.
+- A stopping worker ends its requests at once (swerve's new stop): a request in flight is answered
+  `503` by swerve. A `kernel.exception` listener throws swerve's `WorkerStoppingException` on, out
+  of the kernel, before Symfony logs it or renders an error page.
+
 ## 0.1.0-alpha4 (2026-10-06)
 
 ### Changed

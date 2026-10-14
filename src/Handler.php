@@ -9,12 +9,15 @@ use Psr\Http\Message\UploadedFileInterface;
 use Swerve\ClientRequest;
 use Swerve\Psr\FormBody;
 use Swerve\Psr\RequestBody;
+use Swerve\WorkerStoppingException;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\HttpKernel\Event\ExceptionEvent;
 use Symfony\Component\HttpKernel\HttpKernelInterface;
+use Symfony\Component\HttpKernel\KernelEvents;
 use Symfony\Component\HttpKernel\KernelInterface;
 use Symfony\Component\HttpKernel\TerminableInterface;
 use Symfony\Component\Runtime\SymfonyRuntime;
@@ -88,6 +91,13 @@ final class Handler
             $kernel = $app(...$arguments);
             if ($kernel instanceof KernelInterface) {
                 $kernel->boot();
+                // A worker that stops ends its requests with a WorkerStoppingException, no error of the
+                // application's: out of the kernel, unlogged, for swerve to answer (a 503 when nothing was sent yet)
+                $kernel->getContainer()->get('event_dispatcher')->addListener(KernelEvents::EXCEPTION, static function (ExceptionEvent $event): void {
+                    if ($event->getThrowable() instanceof WorkerStoppingException) {
+                        throw $event->getThrowable();
+                    }
+                }, \PHP_INT_MAX);
             }
 
             return $kernel;
