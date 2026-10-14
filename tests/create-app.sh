@@ -16,9 +16,8 @@ composer config minimum-stability dev
 composer config prefer-stable true
 # phasync/swerve-symfony from this checkout, by the fixture's own autoload rule, not a path
 # repository: this checkout contains the fixture, and a path repository's symlink (or its copy)
-# would make the fixture's vendor contain the fixture, recursively. A class map too: swerve's worker
-# loads the classes under the adapter's install path (src/, below) by their file paths
-php -r '$c = json_decode(file_get_contents("composer.json")); $c->autoload->{"psr-4"}->{"Swerve\\Symfony\\"} = "../../../src/"; $c->autoload->files = ["../../../src/functions.php"]; $c->autoload->classmap = ["../../../src/"]; file_put_contents("composer.json", json_encode($c, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");'
+# would make the fixture's vendor contain the fixture, recursively
+php -r '$c = json_decode(file_get_contents("composer.json")); $c->autoload->{"psr-4"}->{"Swerve\\Symfony\\"} = "../../../src/"; $c->autoload->files = ["../../../src/functions.php"]; file_put_contents("composer.json", json_encode($c, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");'
 if [ -n "${SWERVE_PATH:-}" ]; then
     composer config repositories.swerve "{\"type\": \"path\", \"url\": \"$SWERVE_PATH\", \"options\": {\"symlink\": true, \"versions\": {\"phasync/swerve\": \"dev-main\"}}}"
 else
