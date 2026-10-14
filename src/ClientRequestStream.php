@@ -22,6 +22,9 @@ final class ClientRequestStream
     private ClientRequest $client;
     private int $position = 0;
 
+    /** What fill() read ahead, for the next stream_read() */
+    private string $ahead = '';
+
     /** @return resource */
     public static function open(ClientRequest $client)
     {
@@ -43,12 +46,28 @@ final class ClientRequestStream
         return true;
     }
 
+    /**
+     * Wait for the next bytes in the coroutine reading the stream, before it calls fread(): PHP
+     * calls stream_read() from C, where a wait need not let the other coroutines run (phasync-ext
+     * runs it inline), so stream_read() then finds them without waiting.
+     */
+    public function fill(int $max): void
+    {
+        if ('' === $this->ahead && !$this->client->eof()) {
+            $this->ahead = $this->client->read($max);
+        }
+    }
+
     public function stream_read(int $count): string|false
     {
-        if ($this->client->eof()) {
+        if ('' !== $this->ahead) {
+            $data        = \substr($this->ahead, 0, $count);
+            $this->ahead = (string) \substr($this->ahead, \strlen($data));
+        } elseif ($this->client->eof()) {
             return '';
+        } else {
+            $data = $this->client->read($count);
         }
-        $data = $this->client->read($count);
         $this->position += \strlen($data);
 
         return $data;
@@ -56,7 +75,7 @@ final class ClientRequestStream
 
     public function stream_eof(): bool
     {
-        return $this->client->eof();
+        return '' === $this->ahead && $this->client->eof();
     }
 
     public function stream_tell(): int

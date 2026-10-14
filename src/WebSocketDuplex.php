@@ -44,6 +44,9 @@ final class WebSocketDuplex implements Duplex
 
     public function read(int $max = 65536, ?float $timeout = null): string
     {
+        // The wait for the next frame happens here, in this coroutine, not inside fread()
+        $stream = \stream_get_meta_data($this->resource)['wrapper_data'] ?? null;
+        $stream instanceof ClientRequestStream && $stream->fill($max);
         $data = \fread($this->resource, $max);
         if (false === $data || '' === $data) {
             $this->ended = \feof($this->resource);

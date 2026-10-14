@@ -10,6 +10,16 @@
   `503` by swerve. A `kernel.exception` listener throws swerve's `WorkerStoppingException` on, out
   of the kernel, before Symfony logs it or renders an error page.
 
+### Fixed
+
+- WebSockets with phasync-ext: the inbound frames are read through a stream wrapper, and PHP calls
+  its `stream_read()` from C, where the extension runs a wait inline, holding the worker: the `101`
+  never went out and no message was received. The wait now happens in the WebSocket's coroutine
+  before the read, which then finds the bytes ready (#6).
+- A `StreamedResponse`'s output handler no longer writes to the client itself (PHP calls it from C
+  too): a coroutine writes what it collects, and cancels the callback where it next waits once the
+  client has left.
+
 ## 0.1.0-alpha4 (2026-10-06)
 
 ### Changed

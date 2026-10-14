@@ -3,6 +3,7 @@
 namespace Swerve\Symfony;
 
 use phasync;
+use phasync\IOException;
 use phasync\Psr\ServerRequest as PsrServerRequest;
 use phasync\Util\Pool;
 use Psr\Http\Message\UploadedFileInterface;
@@ -48,7 +49,7 @@ final class Handler
     /** @var array<string, mixed> as PHP-FPM would give it, less the per-request part */
     private readonly array $server;
 
-    /** @var \WeakMap<\Fiber, ClientRequest> the client each coroutine streaming a response writes to, see capture() */
+    /** @var \WeakMap<\Fiber, \stdClass> the bytes each coroutine streaming a response echoed, for its writer, see capture() */
     private static \WeakMap $outputs;
 
     /** How many kernels this worker has ever booted: for tests, which check sockets hold none. */
@@ -277,26 +278,53 @@ final class Handler
         }
     }
 
-    /** A StreamedResponse's callback, echoing into this coroutine's slot of the output buffer. */
+    /**
+     * A StreamedResponse's callback, echoing into this coroutine's slot of the output buffer. The
+     * output handler does not write: PHP calls it from C, where a wait need not let the other
+     * coroutines run (phasync-ext runs it inline). A coroutine of its own writes what it collects,
+     * and when the client left, cancels the callback where it next waits, as a script under PHP-FPM
+     * ends when its client left.
+     */
     private static function sendStreamed(ClientRequest $client, StreamedResponse $response): void
     {
-        $fiber                  = \Fiber::getCurrent();
-        self::$outputs[$fiber]  = $client;
+        $fiber                 = \Fiber::getCurrent();
+        $out                   = new \stdClass();
+        $out->bytes            = '';
+        $out->ended            = false;
+        self::$outputs[$fiber] = $out;
+        $writer                = \phasync::go(static function () use ($client, $out, $fiber) {
+            try {
+                while (!$out->ended || '' !== $out->bytes) {
+                    if ('' === $out->bytes) {
+                        \phasync::awaitFlag($out);
+                        continue;
+                    }
+                    [$bytes, $out->bytes] = [$out->bytes, ''];
+                    $client->write($bytes);
+                }
+            } catch (IOException $e) {
+                $out->ended || \phasync::cancel($fiber, 'The client left');
+
+                throw $e;
+            }
+        });
         \ob_start(self::capture(...), 1);
         try {
             $response->sendContent();
         } finally {
             \ob_end_clean();
             unset(self::$outputs[$fiber]);
+            $out->ended = true;
+            \phasync::raiseFlag($out);
         }
+        \phasync::await($writer);
     }
 
     /**
      * The output handler of a StreamedResponse's callback, which gets every echo at once (chunk
-     * size 1): writes it to the client of the coroutine that echoed it. Output buffers are one
+     * size 1): hands it to the writer of the coroutine that echoed it. Output buffers are one
      * stack for the whole process, and any of these handlers may be on top, so each only acts on
-     * its own coroutine's output and passes any other through. A write that fails (the client
-     * left) throws, ending the callback as a script under PHP-FPM ends when its client left.
+     * its own coroutine's output and passes any other through.
      */
     private static function capture(string $buffer): string
     {
@@ -305,7 +333,8 @@ final class Handler
             return $buffer; // not one of ours: on to the next buffer, or the terminal
         }
         if ('' !== $buffer) {
-            self::$outputs[$fiber]->write($buffer);
+            self::$outputs[$fiber]->bytes .= $buffer;
+            \phasync::raiseFlag(self::$outputs[$fiber]);
         }
 
         return '';
