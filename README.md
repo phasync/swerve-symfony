@@ -144,6 +144,12 @@ public function ticks(): StreamedResponse
   ([above](#websockets)), which swerve sends as a `101` and then runs, the kernel already back in
   the pool.
 
+The framework running correctly on swerve does not mean your application does: static properties
+of your own code are not reset by the kernel pool, and need the same care (see [Process-wide
+state is shared by the kernels of a worker](#before-you-deploy), below). See [Making your
+application safe for concurrent
+requests](https://phasync.github.io/guides/concurrent-requests-in-your-application/).
+
 ### Sessions
 
 PHP's session module keeps one session per process, so Symfony's default session storage
@@ -179,10 +185,12 @@ saves, as in PHP.
   format, so sessions from before the switch are not read: users log in once more. With SQLite,
   set `lock_mode: 0` on `PdoSessionHandler`: its default lock holds a transaction for the whole
   request, which blocks the other workers.
-- **Process-wide state is shared by the kernels of a worker.** `\Locale::setDefault()` (which
-  `Request::setLocale()` calls), `setlocale()`, `date_default_timezone_set()` and static
-  properties of your own code change for every request of the worker. Pass the locale to
-  formatters explicitly.
+- **Process-wide state is shared by the kernels of a worker.** `setlocale()` and static
+  properties of your own code change for every request of the worker. `\Locale::setDefault()`
+  (which `Request::setLocale()` calls) and `date_default_timezone_set()` do not have this
+  problem: swerve runs every request in a `\Scope` of its own, and `fiber-interop/scope` 0.3.0 —
+  which phasync 2.0.2 requires — swaps the default `intl` locale and timezone for each scope (the
+  native `ext-scope` extension does the same when it is loaded instead).
 - **Output buffering is one stack per process.** Each `StreamedResponse`'s output reaches its
   own response, but a callback that does `ob_start()`, waits, then `ob_get_clean()` may catch
   another request's output: don't wait inside your own output buffer. `echo` in a controller
