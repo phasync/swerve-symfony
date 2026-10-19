@@ -149,6 +149,8 @@ of your own code are not reset by the kernel pool, and need the same care (see [
 state is shared by the kernels of a worker](#before-you-deploy), below). See [Making your
 application safe for concurrent
 requests](https://phasync.github.io/guides/concurrent-requests-in-your-application/).
+[phasync/doctor](https://github.com/phasync/doctor) lists the candidates in your code:
+`composer require --dev phasync/doctor`, then `vendor/bin/phasync-doctor`.
 
 ### Sessions
 
