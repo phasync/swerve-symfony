@@ -11,8 +11,6 @@ request and response bodies, and hold WebSockets and Server-Sent Events. This pa
 run a Symfony application unchanged, and lets its controllers hold [WebSockets](#websockets).
 
 ```bash
-composer config minimum-stability dev    # phasync and swerve are on their development versions
-composer config prefer-stable true        # everything else stays stable
 composer require phasync/swerve-symfony
 ```
 
@@ -117,18 +115,6 @@ public function ticks(): StreamedResponse
 }
 ```
 
-## What changes
-
-The Symfony 7.4 skeleton, 4 workers each, requests per second:
-
-| | PHP-FPM | swerve | swerve + phasync-ext |
-|---|---:|---:|---:|
-| JSON route | [1,857](benchmarks/results/fpm-json.txt) | [10,199](benchmarks/results/swerve-json.txt) (5.5×) | [9,841](benchmarks/results/swerve-ext-json.txt) (5.3×) |
-| Page with a session (SQLite) | [261](benchmarks/results/fpm-session.txt) | [2,096](benchmarks/results/swerve-session.txt) (8.0×) | [2,135](benchmarks/results/swerve-ext-session.txt) (8.2×) |
-| Route waiting 10 ms, as for a query | [255](benchmarks/results/fpm-wait.txt) | [358](benchmarks/results/swerve-wait.txt) (1.4×) | [5,046](benchmarks/results/swerve-ext-wait.txt) (19.8×) |
-
-[Method and raw results](benchmarks/).
-
 ## How it runs
 
 - **Once per worker:** the front controller returns its closure (Symfony Runtime's
@@ -146,11 +132,11 @@ The Symfony 7.4 skeleton, 4 workers each, requests per second:
   as with Symfony Runtime's FrankenPHP and Swoole runners.
 - **Concurrency:** a kernel serves one request at a time, so its `RequestStack`, security token,
   session and stateful services belong to that request alone. The pool has no cap: it makes a
-  kernel whenever every existing one is busy, so with phasync-ext, a request waiting for I/O
+  kernel whenever every existing one is busy, so with ext-phasync, a request waiting for I/O
   (MySQL, curl, `sleep()`) lets the worker serve others on one of its own; idle kernels beyond
   the peak used in the last 30 seconds are let go. Each kernel after the first costs about 120 KiB
   in the test application (security, Twig, sessions), since the classes and the compiled
-  container are shared. Without phasync-ext requests rarely overlap, and the pool stays at one.
+  container are shared. Without ext-phasync requests rarely overlap, and the pool stays at one.
 - **Streaming:** a `StreamedResponse` is sent as its callback echoes; a `BinaryFileResponse` as
   the client reads it, with `Range` support. Both hold their kernel until they end. When the
   client leaves, the callback's next `echo` throws, ending it as PHP-FPM ends a script.
@@ -215,12 +201,12 @@ saves, as in PHP.
 - **A raw request body** (a JSON or `PUT` body, not a form) is read into memory before the
   controller runs, as `Request::getContent()` needs it; swerve's `--max-body` caps it (8 MiB by
   default). Form uploads are streamed to temporary files.
-- **Without phasync-ext** a blocking call (PDO, curl, `sleep()`) blocks the whole worker, and more
+- **Without ext-phasync** a blocking call (PDO, curl, `sleep()`) blocks the whole worker, and more
   kernels don't help. Load the extension in production.
 
 ## Compatibility
 
-| Symfony | PHP | phasync-ext |
+| Symfony | PHP | ext-phasync |
 |---|---|---|
 | 6.4, 7.x (tested: 6.4, 7.4) | 8.2 – 8.5 | optional; tested with and without |
 

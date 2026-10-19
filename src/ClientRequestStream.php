@@ -48,7 +48,7 @@ final class ClientRequestStream
 
     /**
      * Wait for the next bytes in the coroutine reading the stream, before it calls fread(): PHP
-     * calls stream_read() from C, where a wait need not let the other coroutines run (phasync-ext
+     * calls stream_read() from C, where a wait need not let the other coroutines run (ext-phasync
      * runs it inline), so stream_read() then finds them without waiting.
      */
     public function fill(int $max): void

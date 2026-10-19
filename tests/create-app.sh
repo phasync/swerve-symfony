@@ -1,7 +1,7 @@
 #!/bin/sh
 # Create the Symfony test application in tests/Fixtures/app, for Symfony version $1 (6.4, 7.4):
 # the framework's own skeleton, with this package installed from the checkout and the test
-# routes of tests/Fixtures/routes added. Idempotent. phasync/swerve dev-main comes from Packagist; SWERVE_PATH,
+# routes of tests/Fixtures/routes added. Idempotent. phasync/swerve comes from Packagist; SWERVE_PATH,
 # when set, installs it from that directory instead (a local checkout of swerve).
 set -eu
 version=$1
@@ -12,8 +12,7 @@ if [ "$(cat app/.symfony-version 2>/dev/null)" != "$version" ]; then
     echo "$version" > app/.symfony-version
 fi
 cd app
-composer config minimum-stability dev
-composer config prefer-stable true
+composer config minimum-stability stable
 # phasync/swerve-symfony from this checkout, by the fixture's own autoload rule, not a path
 # repository: this checkout contains the fixture, and a path repository's symlink (or its copy)
 # would make the fixture's vendor contain the fixture, recursively
@@ -25,7 +24,7 @@ else
 fi
 composer require --no-interaction --no-progress --no-scripts --with-all-dependencies \
     "symfony/twig-bundle:$version.*" "symfony/security-bundle:$version.*" \
-    "symfony/security-csrf:$version.*" "symfony/mime:$version.*" "phasync/swerve:dev-main"
+    "symfony/security-csrf:$version.*" "symfony/mime:$version.*" "phasync/swerve:^0.1"
 cp -r ../routes/. .
 printf 'APP_ENV=prod\nAPP_DEBUG=0\nAPP_SECRET=swerve-symfony-tests\n' > .env.local
 rm -rf var

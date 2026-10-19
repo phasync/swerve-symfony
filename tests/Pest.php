@@ -3,7 +3,7 @@
 /*
  * The tests run the Symfony application in tests/Fixtures/app (made by tests/create-app.sh) on
  * a real swerve, the way users run it. SWERVE_PHP_ARGS adds PHP options, such as loading
- * phasync-ext: CI runs the suite without and with it.
+ * ext-phasync: CI runs the suite without and with it.
  */
 
 /** A free port from 18760 to 18799. */

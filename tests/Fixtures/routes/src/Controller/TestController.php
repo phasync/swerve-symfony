@@ -18,7 +18,7 @@ use Symfony\Component\Security\Http\Authentication\AuthenticationUtils;
 
 final class TestController extends AbstractController
 {
-    /** Wait as a coroutine, with or without phasync-ext. */
+    /** Wait as a coroutine, with or without ext-phasync. */
     private static function wait(float $seconds): void
     {
         \phasync::sleep($seconds);
@@ -183,7 +183,7 @@ final class TestController extends AbstractController
         return new Response('slow done');
     }
 
-    /** A blocking wait, as for a database query: cooperative with phasync-ext only. */
+    /** A blocking wait, as for a database query: cooperative with ext-phasync only. */
     #[Route('/usleep')]
     public function blockingWait(Request $request): JsonResponse
     {

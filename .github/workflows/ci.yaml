@@ -43,10 +43,10 @@ jobs:
       - name: ✅ Tests
         run: vendor/bin/pest --stop-on-defect
 
-      - name: 📥 Find phasync-ext (bundled in phasync)
+      - name: 📥 Find ext-phasync (bundled in phasync)
         run: |
           cp "vendor/phasync/phasync/ext/phasync-${{ matrix.php }}-nts-x86_64-glibc.so" "$RUNNER_TEMP/phasync.so"
-          php -d extension="$RUNNER_TEMP/phasync.so" -r 'extension_loaded("phasync") || exit(1); echo "phasync-ext ", phpversion("phasync"), "\n";'
+          php -d extension="$RUNNER_TEMP/phasync.so" -r 'extension_loaded("phasync") || exit(1); echo "ext-phasync ", phpversion("phasync"), "\n";'
 
-      - name: ✅ Tests with phasync-ext
+      - name: ✅ Tests with ext-phasync
         run: SWERVE_PHP_ARGS="-d extension=$RUNNER_TEMP/phasync.so" vendor/bin/pest --stop-on-defect

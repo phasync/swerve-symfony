@@ -281,7 +281,7 @@ final class Handler
     /**
      * A StreamedResponse's callback, echoing into this coroutine's slot of the output buffer. The
      * output handler does not write: PHP calls it from C, where a wait need not let the other
-     * coroutines run (phasync-ext runs it inline). A coroutine of its own writes what it collects,
+     * coroutines run (ext-phasync runs it inline). A coroutine of its own writes what it collects,
      * and when the client left, cancels the callback where it next waits, as a script under PHP-FPM
      * ends when its client left.
      */
