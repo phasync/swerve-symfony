@@ -14,8 +14,11 @@ jobs:
       fail-fast: false
       matrix:
         php: ["8.2", "8.3", "8.4", "8.5"]
-        # The LTS versions (6.4, 7.4) and the newest major (8.1)
+        # The LTS versions (6.4, 7.4) and the newest major (8.1); Symfony 8 itself needs PHP 8.4+
         framework: ["6.4", "7.4", "8.1"]
+        exclude:
+          - { framework: "8.1", php: "8.2" }
+          - { framework: "8.1", php: "8.3" }
 
     name: ⚙️ Symfony ${{ matrix.framework }} on PHP ${{ matrix.php }}
 
