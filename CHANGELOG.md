@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2 (2026-10-19)
+
+Symfony 8 support.
+
 ## 0.1.1 (2026-10-19)
 
 Documentation: clarify application-level state isolation and correct the locale/timezone note.

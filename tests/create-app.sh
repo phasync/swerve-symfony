@@ -1,10 +1,11 @@
 #!/bin/sh
-# Create the Symfony test application in tests/Fixtures/app, for Symfony version $1 (6.4, 7.4):
-# the framework's own skeleton, with this package installed from the checkout and the test
-# routes of tests/Fixtures/routes added. Idempotent. phasync/swerve comes from Packagist; SWERVE_PATH,
-# when set, installs it from that directory instead (a local checkout of swerve).
+# Create the Symfony test application in tests/Fixtures/app, for Symfony version $1 or
+# $SYMFONY_VERSION (6.4, 7.4, 8.1; default: 8.1, the newest): the framework's own skeleton, with
+# this package installed from the checkout and the test routes of tests/Fixtures/routes added.
+# Idempotent. phasync/swerve comes from Packagist; SWERVE_PATH, when set, installs it from that
+# directory instead (a local checkout of swerve).
 set -eu
-version=$1
+version=${1:-${SYMFONY_VERSION:-8.1}}
 cd "$(dirname "$0")/Fixtures"
 if [ "$(cat app/.symfony-version 2>/dev/null)" != "$version" ]; then
     rm -rf app

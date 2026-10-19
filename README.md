@@ -218,7 +218,7 @@ saves, as in PHP.
 
 | Symfony | PHP | ext-phasync |
 |---|---|---|
-| 6.4, 7.x (tested: 6.4, 7.4) | 8.2 – 8.5 | optional; tested with and without |
+| 6.4, 7.x, 8.x (tested: 6.4, 7.4, 8.1) | 8.2 – 8.5 | optional; tested with and without |
 
 ## License
 
